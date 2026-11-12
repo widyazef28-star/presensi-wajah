@@ -1,0 +1,376 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Presensi Wajah Mahasiswa</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js" crossorigin="anonymous"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      background: #f1f5f9;
+      color: #1e293b;
+      padding: 25px;
+    }
+
+    .container {
+      max-width: 850px;
+      margin: auto;
+    }
+
+    header {
+      background: #1e40af;
+      color: white;
+      padding: 25px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+
+    header h1 {
+      font-size: 25px;
+      margin-bottom: 8px;
+    }
+
+    .card {
+      background: white;
+      padding: 22px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+      box-shadow: 0 3px 12px #0000000d;
+    }
+
+    h2 {
+      font-size: 19px;
+      margin-bottom: 15px;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      border: none;
+      padding: 12px 18px;
+      border-radius: 7px;
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+      margin: 4px 2px;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    .secondary {
+      background: #64748b;
+    }
+
+    video {
+      width: 100%;
+      max-height: 350px;
+      background: #0f172a;
+      border-radius: 10px;
+      margin: 12px 0;
+    }
+
+    #status {
+      padding: 12px;
+      background: #eff6ff;
+      border-radius: 7px;
+      margin-top: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+
+    th, td {
+      padding: 10px;
+      border-bottom: 1px solid #e2e8f0;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    th {
+      background: #eff6ff;
+    }
+
+    .note {
+      color: #64748b;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+<div class="container">
+
+  <header>
+    <h1>Presensi Wajah Mahasiswa</h1>
+    <p>Sistem Presensi Menggunakan MediaPipe Face Landmarker</p>
+  </header>
+
+  <section class="card">
+    <h2>Data Mahasiswa</h2>
+
+    <input id="nama" placeholder="Masukkan nama mahasiswa">
+    <input id="nim" placeholder="Masukkan NIM mahasiswa">
+
+    <button onclick="simpanMahasiswa()">Simpan Data</button>
+  </section>
+
+  <section class="card">
+    <h2>Deteksi Wajah</h2>
+
+    <video id="video" autoplay playsinline muted></video>
+
+    <div>
+      <button onclick="mulaiKamera()">Aktifkan Kamera</button>
+      <button class="secondary" onclick="hentikanKamera()">Matikan Kamera</button>
+    </div>
+
+    <p id="status">Kamera belum diaktifkan.</p>
+    <p class="note">
+      Deteksi landmark menunjukkan posisi titik-titik wajah,
+      bukan otomatis membuktikan identitas seseorang.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>Presensi Mahasiswa</h2>
+    <button onclick="presensi()">Catat Presensi</button>
+    <p class="note">Presensi sementara ini belum memverifikasi identitas wajah.</p>
+  </section>
+
+  <section class="card">
+    <h2>Riwayat Presensi</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Nama</th>
+          <th>NIM</th>
+          <th>Tanggal</th>
+          <th>Waktu</th>
+        </tr>
+      </thead>
+      <tbody id="riwayat"></tbody>
+    </table>
+  </section>
+
+</div>
+
+<script type="module">
+  const { FaceLandmarker, FilesetResolver } =
+    await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+
+  let faceLandmarker;
+  let stream;
+  let deteksiAktif = false;
+  let database;
+
+  const video = document.getElementById("video");
+  const status = document.getElementById("status");
+
+  // Membuat database IndexedDB sementara
+  const request = indexedDB.open("PresensiWajah", 1);
+
+  request.onupgradeneeded = function(event) {
+    const db = event.target.result;
+
+    db.createObjectStore("mahasiswa", { keyPath: "nim" });
+    db.createObjectStore("presensi", {
+      keyPath: "id",
+      autoIncrement: true
+    });
+  };
+
+  request.onsuccess = function(event) {
+    database = event.target.result;
+    tampilkanRiwayat();
+  };
+
+  request.onerror = function() {
+    status.textContent = "Database lokal gagal dibuka.";
+  };
+
+  async function siapkanModel() {
+    if (faceLandmarker) return;
+
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+
+    faceLandmarker = await FaceLandmarker.createFromOptions(
+      vision,
+      {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "CPU"
+        },
+        runningMode: "VIDEO",
+        numFaces: 1
+      }
+    );
+  }
+
+  window.simpanMahasiswa = function() {
+    if (!database) {
+      alert("Database sedang disiapkan.");
+      return;
+    }
+
+    const nama = document.getElementById("nama").value.trim();
+    const nim = document.getElementById("nim").value.trim();
+
+    if (!nama || !nim) {
+      alert("Nama dan NIM harus diisi.");
+      return;
+    }
+
+    const tx = database.transaction("mahasiswa", "readwrite");
+
+    tx.objectStore("mahasiswa").put({ nama, nim });
+
+    tx.oncomplete = () => alert("Data mahasiswa berhasil disimpan.");
+    tx.onerror = () => alert("Gagal menyimpan data.");
+  };
+
+  window.mulaiKamera = async function() {
+    try {
+      await siapkanModel();
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false
+      });
+
+      video.srcObject = stream;
+      await video.play();
+
+      deteksiAktif = true;
+      deteksiWajah();
+    } catch (error) {
+      status.textContent = "Kamera gagal diaktifkan: " + error.message;
+    }
+  };
+
+  function deteksiWajah() {
+    if (!deteksiAktif || video.readyState < 2) return;
+
+    const hasil = faceLandmarker.detectForVideo(
+      video,
+      performance.now()
+    );
+
+    if (hasil.faceLandmarks.length > 0) {
+      status.textContent =
+        "Wajah terdeteksi. Jumlah titik landmark: " +
+        hasil.faceLandmarks[0].length;
+    } else {
+      status.textContent = "Wajah belum terdeteksi.";
+    }
+
+    requestAnimationFrame(deteksiWajah);
+  }
+
+  window.hentikanKamera = function() {
+    deteksiAktif = false;
+
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      stream = null;
+    }
+
+    video.srcObject = null;
+    status.textContent = "Kamera dimatikan.";
+  };
+
+  window.presensi = function() {
+    if (!database) {
+      alert("Database belum siap.");
+      return;
+    }
+
+    const nama = document.getElementById("nama").value.trim();
+    const nim = document.getElementById("nim").value.trim();
+
+    if (!nama || !nim) {
+      alert("Isi nama dan NIM terlebih dahulu.");
+      return;
+    }
+
+    const tx = database.transaction("mahasiswa", "readonly");
+    const getData = tx.objectStore("mahasiswa").get(nim);
+
+    getData.onsuccess = function() {
+      if (!getData.result) {
+        alert("Daftarkan mahasiswa terlebih dahulu.");
+        return;
+      }
+
+      const sekarang = new Date();
+
+      const data = {
+        nama: getData.result.nama,
+        nim,
+        tanggal: sekarang.toLocaleDateString("id-ID"),
+        waktu: sekarang.toLocaleTimeString("id-ID")
+      };
+
+      const simpan = database.transaction("presensi", "readwrite");
+      simpan.objectStore("presensi").add(data);
+
+      simpan.oncomplete = () => {
+        tampilkanRiwayat();
+        alert("Presensi demo berhasil dicatat.");
+      };
+    };
+  };
+
+  window.tampilkanRiwayat = function() {
+    if (!database) return;
+
+    const tx = database.transaction("presensi", "readonly");
+    const requestData = tx.objectStore("presensi").getAll();
+
+    requestData.onsuccess = function() {
+      const tbody = document.getElementById("riwayat");
+      tbody.innerHTML = "";
+
+      requestData.result.forEach(data => {
+        const tr = document.createElement("tr");
+
+        [data.nama, data.nim, data.tanggal, data.waktu]
+          .forEach(nilai => {
+            const td = document.createElement("td");
+            td.textContent = nilai;
+            tr.appendChild(td);
+          });
+
+        tbody.appendChild(tr);
+      });
+    };
+  };
+</script>
+
+</body>
+</html>
