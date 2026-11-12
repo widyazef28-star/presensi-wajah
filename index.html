@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -188,6 +187,8 @@
 
   const video = document.getElementById("video");
   const status = document.getElementById("status");
+  const API_URL = "https://presensi-wajah-api.widyazef28.workers.dev";
+
 
   // Membuat database IndexedDB sementara
   const request = indexedDB.open("PresensiWajah", 1);
@@ -233,26 +234,28 @@
   }
 
   window.simpanMahasiswa = function() {
-    if (!database) {
-      alert("Database sedang disiapkan.");
-      return;
-    }
+  const nama = document.getElementById("nama").value.trim();
+  const nim = document.getElementById("nim").value.trim();
 
-    const nama = document.getElementById("nama").value.trim();
-    const nim = document.getElementById("nim").value.trim();
+  if (!nama || !nim) {
+    alert("Nama dan NIM harus diisi");
+    return;
+  }
 
-    if (!nama || !nim) {
-      alert("Nama dan NIM harus diisi.");
-      return;
-    }
+  try {
+    const response = await fetch(API_URL + "/api/mahasiswa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nama, nim })
+    });
 
-    const tx = database.transaction("mahasiswa", "readwrite");
+    const hasil = await response.json();
+    alert(hasil.message);
+  } catch (error) {
+    alert("Gagal terhubung ke server");
+  }
+};
 
-    tx.objectStore("mahasiswa").put({ nama, nim });
-
-    tx.oncomplete = () => alert("Data mahasiswa berhasil disimpan.");
-    tx.onerror = () => alert("Gagal menyimpan data.");
-  };
 
   window.mulaiKamera = async function() {
     try {
@@ -304,67 +307,78 @@
     status.textContent = "Kamera dimatikan.";
   };
 
-  window.presensi = function() {
-    if (!database) {
-      alert("Database belum siap.");
-      return;
+  
+window.presensi = async function() {
+  const nim = document.getElementById("nim").value.trim();
+
+  if (!nim) {
+    alert("Masukkan NIM terlebih dahulu");
+    return;
+  }
+
+  try {
+    const response = await fetch(API_URL + "/api/presensi", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ nim })
+    });
+
+    const hasil = await response.json();
+
+    if (hasil.success) {
+      alert(
+        "Presensi berhasil!\n" +
+        "Nama: " + hasil.mahasiswa + "\n" +
+        "Tanggal: " + hasil.tanggal + "\n" +
+        "Waktu: " + hasil.waktu
+      );
+
+      tampilkanRiwayat();
+    } else {
+      alert(hasil.message);
+    }
+  } catch (error) {
+    alert("Tidak bisa terhubung ke Cloudflare");
+  }
+};
+
+
+ 
+window.tampilkanRiwayat = async function() {
+  try {
+    const response = await fetch(API_URL + "/api/presensi");
+    const hasil = await response.json();
+
+    if (!hasil.success) {
+      throw new Error("Gagal mengambil data");
     }
 
-    const nama = document.getElementById("nama").value.trim();
-    const nim = document.getElementById("nim").value.trim();
+    const tbody = document.getElementById("riwayat");
+    tbody.innerHTML = "";
 
-    if (!nama || !nim) {
-      alert("Isi nama dan NIM terlebih dahulu.");
-      return;
-    }
+    hasil.data.forEach(data => {
+      const tr = document.createElement("tr");
 
-    const tx = database.transaction("mahasiswa", "readonly");
-    const getData = tx.objectStore("mahasiswa").get(nim);
+      [
+        data.nama,
+        data.nim,
+        data.tanggal,
+        data.waktu
+      ].forEach(nilai => {
+        const td = document.createElement("td");
+        td.textContent = nilai;
+        tr.appendChild(td);
+      });
 
-    getData.onsuccess = function() {
-      if (!getData.result) {
-        alert("Daftarkan mahasiswa terlebih dahulu.");
-        return;
-      }
+      tbody.appendChild(tr);
+    });
 
-      const sekarang = new Date();
-
-      const data = {
-        nama: getData.result.nama,
-        nim,
-        tanggal: sekarang.toLocaleDateString("id-ID"),
-        waktu: sekarang.toLocaleTimeString("id-ID")
-      };
-
-      const simpan = database.transaction("presensi", "readwrite");
-      simpan.objectStore("presensi").add(data);
-
-      simpan.oncomplete = () => {
-        tampilkanRiwayat();
-        alert("Presensi demo berhasil dicatat.");
-      };
-    };
-  };
-
-  window.tampilkanRiwayat = function() {
-    if (!database) return;
-
-    const tx = database.transaction("presensi", "readonly");
-    const requestData = tx.objectStore("presensi").getAll();
-
-    requestData.onsuccess = function() {
-      const tbody = document.getElementById("riwayat");
-      tbody.innerHTML = "";
-
-      requestData.result.forEach(data => {
-        const tr = document.createElement("tr");
-
-        [data.nama, data.nim, data.tanggal, data.waktu]
-          .forEach(nilai => {
-            const td = document.createElement("td");
-            td.textContent = nilai;
-            tr.appendChild(td);
-          });
+  } catch (error) {
+    console.error("Riwayat gagal dimuat:", error);
+  }
+};
 
         tbody.appendChild(tr);
       });
